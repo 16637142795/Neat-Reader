@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import localforage from 'localforage'
 import ePub from 'epubjs'
+import { v4 as uuidv4 } from 'uuid'
 
 // 定义电子书元数据类型
 export interface EbookMetadata {
@@ -181,15 +182,29 @@ export const useEbookStore = defineStore('ebook', () => {
 
   const removeBook = async (bookId: string, storageType?: 'local' | 'baidupan') => {
     try {
-      console.log('正在删除书籍:', bookId);
-      // 1. 过滤掉要删除的书籍，重新赋值触发响应式
+      console.log('正在删除书籍:', bookId, '存储类型:', storageType);
+      
+      // 1. 找到要删除的书籍，获取其存储类型（如果未提供）
+      const bookToRemove = books.value.find(book => book.id === bookId);
+      const actualStorageType = storageType || bookToRemove?.storageType;
+      
+      console.log('实际存储类型:', actualStorageType);
+      
+      // 2. 过滤掉要删除的书籍，重新赋值触发响应式
+      const initialLength = books.value.length;
       books.value = books.value.filter(book => book.id !== bookId);
       
-      // 2. 同步到本地数据库
+      if (books.value.length === initialLength) {
+        console.error('未找到要删除的书籍:', bookId);
+        throw new Error('未找到要删除的书籍');
+      }
+      
+      // 3. 同步到本地数据库
       await saveBooks();
       
-      // 3. 清理该书籍关联的物理文件
-      if (storageType === 'local') {
+      // 4. 清理该书籍关联的物理文件
+      if (actualStorageType === 'local') {
+        console.log('清理本地存储的书籍文件:', bookId);
         await localforage.removeItem(`ebook_content_${bookId}`);
         // 清理封面
         await localforage.removeItem(`ebook_cover_${bookId}`);
@@ -199,6 +214,10 @@ export const useEbookStore = defineStore('ebook', () => {
       return true;
     } catch (error) {
       console.error('删除书籍失败:', error);
+      if (error instanceof Error) {
+        console.error('错误详情:', error.message);
+        console.error('错误堆栈:', error.stack);
+      }
       return false;
     }
   };
@@ -826,7 +845,7 @@ export const useEbookStore = defineStore('ebook', () => {
   const importEpubFile = async (file: File): Promise<EbookMetadata | null> => {
     try {
       // 生成唯一 ID
-      const id = `epub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const id = `epub_${uuidv4()}`;
       
       // 将文件转换为 ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
@@ -886,7 +905,7 @@ export const useEbookStore = defineStore('ebook', () => {
   const importPdfFile = async (file: File): Promise<EbookMetadata | null> => {
     try {
       // 生成唯一 ID
-      const id = `pdf_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const id = `pdf_${uuidv4()}`;
       
       // 将文件转换为 ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
@@ -924,7 +943,7 @@ export const useEbookStore = defineStore('ebook', () => {
   const importTxtFile = async (file: File): Promise<EbookMetadata | null> => {
     try {
       // 生成唯一 ID
-      const id = `txt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const id = `txt_${uuidv4()}`;
       
       // 将文件转换为 ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
@@ -960,18 +979,32 @@ export const useEbookStore = defineStore('ebook', () => {
 
   // 导入电子书文件
   const importEbookFile = async (file: File): Promise<EbookMetadata | null> => {
-    const fileExtension = file.name.split('.').pop()?.toLowerCase();
-    
-    switch (fileExtension) {
-      case 'epub':
-        return await importEpubFile(file);
-      case 'pdf':
-        return await importPdfFile(file);
-      case 'txt':
-        return await importTxtFile(file);
-      default:
-        console.error('不支持的文件格式:', fileExtension);
-        return null;
+    try {
+      const fileExtension = file.name.split('.').pop()?.toLowerCase();
+      
+      if (!fileExtension) {
+        console.error('无法获取文件扩展名');
+        throw new Error('无法获取文件扩展名');
+      }
+      
+      switch (fileExtension) {
+        case 'epub':
+          return await importEpubFile(file);
+        case 'pdf':
+          return await importPdfFile(file);
+        case 'txt':
+          return await importTxtFile(file);
+        default:
+          console.error('不支持的文件格式:', fileExtension);
+          throw new Error(`不支持的文件格式: ${fileExtension}`);
+      }
+    } catch (error) {
+      console.error('导入电子书文件失败:', error);
+      if (error instanceof Error) {
+        console.error('错误详情:', error.message);
+        console.error('错误堆栈:', error.stack);
+      }
+      return null;
     }
   };
 

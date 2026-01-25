@@ -406,16 +406,19 @@ onMounted(async () => {
 }
 
 .grid .book-title {
-  font-size: 16px;
-  font-weight: bold;
-  color: #333;
-  margin: 0 0 4px 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
+        font-size: 16px;
+        font-weight: bold;
+        color: #333;
+        margin: 0 0 4px 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        display: box;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        -webkit-box-orient: vertical;
+        box-orient: vertical;
+      }
 
 .grid .book-author {
   font-size: 14px;
