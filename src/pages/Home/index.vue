@@ -95,7 +95,7 @@
       <div 
         class="menu-item"
         @click="uploadToBaidupan(selectedBook)"
-        v-if="selectedBook && selectedBook.storageType === 'local'"
+        v-if="selectedBook"
       >
         📤 上传到百度网盘
       </div>
@@ -178,9 +178,6 @@ const handleFileSelect = async (event: Event) => {
     if (result) {
       dialogStore.closeDialog()
       dialogStore.showSuccessDialog('导入成功')
-      
-      // 跳转到阅读器页面
-      router.push(`/reader/${result.id}`)
     } else {
       dialogStore.closeDialog()
       dialogStore.showErrorDialog('导入失败', '无法导入所选文件')
