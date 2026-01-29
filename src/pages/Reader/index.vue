@@ -1045,6 +1045,11 @@ const initEpub = async () => {
       await rendition.value.display()
     }
     
+    // 设置初始章节标题
+    if (chapters.value[currentChapterIndex.value]?.title) {
+      currentChapterTitle.value = chapters.value[currentChapterIndex.value].title
+    }
+    
     // 加载书签
     await loadBookmarks()
     
@@ -1120,10 +1125,13 @@ const closeSidebar = () => {
   document.removeEventListener('click', handleOutsideClick)
 }
 
-const goToChapter = (href: string, index: number) => {
+const goToChapter = async (href: string, index: number) => {
   currentChapterIndex.value = index
+  if (chapters.value[index]?.title) {
+    currentChapterTitle.value = chapters.value[index].title
+  }
   if (rendition.value) {
-    rendition.value.display(href)
+    await rendition.value.display(href)
     activeSidebar.value = null
     showControls.value = false
     updatePageInfo()
@@ -1393,15 +1401,24 @@ const loadNextChapter = async () => {
   
   currentChapterIndex.value++
   
-  await rendition.value.display(chapters.value[currentChapterIndex.value].href)
-  
-  await nextTick()
-  
-  if (container) {
-    container.scrollTop = 0
+  if (chapters.value[currentChapterIndex.value]?.title) {
+    currentChapterTitle.value = chapters.value[currentChapterIndex.value].title
   }
   
-  await preloadNextChapter()
+  try {
+    await rendition.value.display(chapters.value[currentChapterIndex.value].href)
+    
+    await nextTick()
+    
+    if (container) {
+      container.scrollTop = 0
+    }
+    
+    await preloadNextChapter()
+  } catch (error) {
+    console.error('加载下一章失败:', error)
+    currentChapterIndex.value--
+  }
   
   isChapterSwitching.value = false
 }
@@ -1415,12 +1432,21 @@ const loadPrevChapter = async () => {
   
   currentChapterIndex.value--
   
-  await rendition.value.display(chapters.value[currentChapterIndex.value].href)
+  if (chapters.value[currentChapterIndex.value]?.title) {
+    currentChapterTitle.value = chapters.value[currentChapterIndex.value].title
+  }
   
-  await nextTick()
-  
-  if (container) {
-    container.scrollTop = container.scrollHeight
+  try {
+    await rendition.value.display(chapters.value[currentChapterIndex.value].href)
+    
+    await nextTick()
+    
+    if (container) {
+      container.scrollTop = container.scrollHeight
+    }
+  } catch (error) {
+    console.error('加载上一章失败:', error)
+    currentChapterIndex.value++
   }
   
   isChapterSwitching.value = false
@@ -1445,14 +1471,45 @@ const bindRenditionEvents = () => {
   
   rendition.value.on('relocated', (location: any) => {
     updatePageInfo()
+    
     if (location.start?.cfi) {
       saveProgressInternal(location.start.cfi)
     }
+    
+    updateChapterTitle(location)
   })
   
   rendition.value.on('rendered', (section: any) => {
-    currentChapterTitle.value = section.document.title || chapters.value[currentChapterIndex.value]?.title || '未知章节'
+    updateChapterTitle()
   })
+}
+
+const updateChapterTitle = (location?: any) => {
+  let title = '未知章节'
+  
+  if (location?.start?.cfi && bookInstance.value) {
+    try {
+      const spineItem = bookInstance.value.spine.get(location.start.cfi)
+      if (spineItem && spineItem.href) {
+        const navItem = chapters.value.find(ch => ch.href === spineItem.href || spineItem.href.includes(ch.href))
+        if (navItem) {
+          title = navItem.title
+        }
+      }
+    } catch (e) {
+      console.warn('获取章节信息失败:', e)
+    }
+  }
+  
+  if (title === '未知章节' && location?.section?.document?.title) {
+    title = location.section.document.title
+  }
+  
+  if (title === '未知章节' && chapters.value[currentChapterIndex.value]?.title) {
+    title = chapters.value[currentChapterIndex.value].title
+  }
+  
+  currentChapterTitle.value = title
 }
 
 const saveProgress = async () => {
