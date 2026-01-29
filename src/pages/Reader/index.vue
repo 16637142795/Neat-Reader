@@ -1014,7 +1014,8 @@ const initEpub = async () => {
       snap: pageMode.value === 'page',
       spread: 'none',
       minSpreadWidth: 0,
-      method: 'document'
+      allowScripts: true,
+      allowModals: true
     }
     
     rendition.value = bookInstance.value.renderTo(container, renderOptions)
@@ -1372,7 +1373,8 @@ const preloadNextChapter = async () => {
       width: '100%',
       height: '100%',
       flow: 'scrolled',
-      manager: 'continuous'
+      manager: 'continuous',
+      allowScripts: true
     })
     
     await nextChapterRendition.value.display(nextChapter.href)
