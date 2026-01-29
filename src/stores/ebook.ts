@@ -4,6 +4,16 @@ import localforage from 'localforage'
 import ePub from 'epubjs'
 import { v4 as uuidv4 } from 'uuid'
 
+// 定义分类类型
+export interface BookCategory {
+  id: string;
+  name: string;
+  color: string;
+  bookIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 // 定义电子书元数据类型
 export interface EbookMetadata {
   id: string;
@@ -18,6 +28,7 @@ export interface EbookMetadata {
   readingProgress: number;
   storageType: 'local' | 'baidupan';
   baidupanPath?: string;
+  categoryId?: string;
   addedAt: number;
 }
 
@@ -87,6 +98,7 @@ localforage.config({
 export const useEbookStore = defineStore('ebook', () => {
   // 状态
   const books = ref<EbookMetadata[]>([]);
+  const categories = ref<BookCategory[]>([]);
   const currentBook = ref<EbookMetadata | null>(null);
   const readingProgress = ref<ReadingProgress | null>(null);
   const userConfig = ref<UserConfig>({
@@ -143,6 +155,19 @@ export const useEbookStore = defineStore('ebook', () => {
       .slice(0, 10);
   });
 
+  // 分类相关计算属性
+  const getBooksByCategory = computed(() => {
+    return (categoryId: string) => {
+      return books.value.filter(book => book.categoryId === categoryId);
+    };
+  });
+
+  const getCategoryById = computed(() => {
+    return (categoryId: string) => {
+      return categories.value.find(category => category.id === categoryId) || null;
+    };
+  });
+
   // Blob URL 转 Base64 工具函数
   const blobToBase64 = (blobUrl: string): Promise<string> => {
     return new Promise(async (resolve, reject) => {
@@ -169,15 +194,13 @@ export const useEbookStore = defineStore('ebook', () => {
         console.log('成功加载书籍列表，书籍数量:', savedBooks.length);
         books.value = savedBooks;
         
-        // 为EPUB书籍重新生成封面
-        for (const book of books.value) {
-          // 检查封面是否为失效的 blob 链接
+        // 为EPUB书籍重新生成封面（并行处理）
+        await Promise.all(books.value.map(async (book) => {
           if (book.cover && book.cover.startsWith('blob:')) {
             console.log('清除失效的 blob 封面链接:', book.id);
-            book.cover = ''; // 清除失效链接，触发下方的重新生成逻辑
+            book.cover = '';
           }
           
-          // 为没有封面的 EPUB 书籍重新生成封面
           if (book.format === 'epub' && !book.cover) {
             try {
               console.log('为书籍重新生成封面:', book.id);
@@ -189,16 +212,12 @@ export const useEbookStore = defineStore('ebook', () => {
                 });
                 const coverUrl = await epubBook.coverUrl();
                 if (coverUrl) {
-                  // 如果是 blob URL，转换为 Base64 持久化存储
                   if (coverUrl.startsWith('blob:')) {
                     try {
                       console.log('将重新生成的封面转换为 Base64');
                       book.cover = await blobToBase64(coverUrl);
                       console.log('封面重新生成并转换成功:', book.id);
-                      // 释放 Blob 内存
                       URL.revokeObjectURL(coverUrl);
-                      // 立即保存更新后的封面
-                      await saveBooks();
                     } catch (e) {
                       console.warn('封面转换 Base64 失败:', e);
                     }
@@ -212,7 +231,7 @@ export const useEbookStore = defineStore('ebook', () => {
               console.warn('封面重新生成失败:', book.id, e);
             }
           }
-        }
+        }));
         
         // 验证加载的数据
         if (books.value.length > 0) {
@@ -257,6 +276,7 @@ export const useEbookStore = defineStore('ebook', () => {
           readingProgress: book.readingProgress,
           storageType: book.storageType,
           baidupanPath: book.baidupanPath,
+          categoryId: book.categoryId,
           addedAt: book.addedAt
         };
         
@@ -273,6 +293,353 @@ export const useEbookStore = defineStore('ebook', () => {
         console.error('错误详情:', error.message);
         console.error('错误堆栈:', error.stack);
       }
+    }
+  };
+
+  // 加载分类列表
+  const loadCategories = async () => {
+    try {
+      console.log('开始加载分类列表...');
+      const savedCategories = await localforage.getItem<BookCategory[]>('categories');
+      
+      if (savedCategories && Array.isArray(savedCategories) && savedCategories.length > 0) {
+        console.log('成功加载分类列表，分类数量:', savedCategories.length);
+        // 确保数据是干净的纯对象
+        categories.value = savedCategories.map(category => ({
+          id: category.id || `category_${Date.now()}_${Math.random()}`,
+          name: category.name || '未命名',
+          color: category.color || '#999999',
+          bookIds: Array.isArray(category.bookIds) ? [...category.bookIds] : [],
+          createdAt: category.createdAt || Date.now(),
+          updatedAt: category.updatedAt || Date.now()
+        }));
+      } else {
+        console.log('未找到保存的分类列表或分类为空，创建默认分类');
+        categories.value = [];
+        // 直接设置默认分类，不调用addCategory以避免可能的递归问题
+        const defaultCategory: BookCategory = {
+          id: `category_default_${Date.now()}`,
+          name: '未分类',
+          color: '#999999',
+          bookIds: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        };
+        categories.value.push(defaultCategory);
+        // 保存到本地存储
+        await localforage.setItem('categories', [defaultCategory]);
+        console.log('默认分类创建成功');
+      }
+    } catch (error) {
+      console.error('加载分类列表失败:', error);
+      // 出错时初始化为默认分类
+      categories.value = [];
+      const defaultCategory: BookCategory = {
+        id: `category_default_${Date.now()}`,
+        name: '未分类',
+        color: '#999999',
+        bookIds: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      categories.value.push(defaultCategory);
+      try {
+        await localforage.setItem('categories', [defaultCategory]);
+      } catch (e) {
+        console.error('保存默认分类失败:', e);
+      }
+    }
+  };
+
+  // 保存分类列表
+  const saveCategories = async () => {
+    try {
+      console.log('正在保存分类列表，分类数量:', categories.value.length);
+      console.log('分类列表内容:', JSON.stringify(categories.value));
+      
+      // 确保数据是可序列化的
+      const categoriesToSave = categories.value.map(category => ({
+        id: category.id,
+        name: category.name,
+        color: category.color,
+        bookIds: Array.isArray(category.bookIds) ? [...category.bookIds] : [],
+        createdAt: category.createdAt,
+        updatedAt: category.updatedAt
+      }));
+      
+      console.log('准备保存的分类数据:', JSON.stringify(categoriesToSave));
+      
+      await localforage.setItem('categories', categoriesToSave);
+      
+      // 验证保存是否成功
+      const savedData = await localforage.getItem('categories');
+      console.log('验证保存结果:', savedData);
+      
+      if (savedData && Array.isArray(savedData) && savedData.length === categoriesToSave.length) {
+        console.log('分类列表保存成功，验证通过');
+      } else {
+        console.error('分类列表保存验证失败');
+      }
+    } catch (error) {
+      console.error('保存分类列表失败:', error);
+      if (error instanceof Error) {
+        console.error('错误详情:', error.message);
+        console.error('错误堆栈:', error.stack);
+      }
+      throw error;
+    }
+  };
+
+  // 添加分类
+  const addCategory = async (name: string, color: string) => {
+    try {
+      console.log('开始添加分类:', name, color);
+      
+      const newCategory: BookCategory = {
+        id: `category_${uuidv4()}`,
+        name,
+        color,
+        bookIds: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      
+      console.log('新分类对象:', newCategory);
+      
+      categories.value.push(newCategory);
+      
+      console.log('分类已添加到内存，当前分类数量:', categories.value.length);
+      console.log('准备保存分类到本地存储...');
+      
+      await saveCategories();
+      
+      console.log('分类添加成功:', newCategory.name);
+      return newCategory;
+    } catch (error) {
+      console.error('添加分类失败:', error);
+      if (error instanceof Error) {
+        console.error('错误详情:', error.message);
+        console.error('错误堆栈:', error.stack);
+      }
+      throw error; // 重新抛出错误，让调用方知道失败
+    }
+  };
+
+  // 更新分类
+  const updateCategory = async (categoryId: string, updates: Partial<BookCategory>) => {
+    try {
+      const index = categories.value.findIndex(category => category.id === categoryId);
+      if (index !== -1) {
+        categories.value[index] = {
+          ...categories.value[index],
+          ...updates,
+          updatedAt: Date.now()
+        };
+        await saveCategories();
+        console.log('分类更新成功:', categories.value[index].name);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('更新分类失败:', error);
+      return false;
+    }
+  };
+
+  // 删除分类
+  const deleteCategory = async (categoryId: string) => {
+    try {
+      const index = categories.value.findIndex(category => category.id === categoryId);
+      if (index !== -1) {
+        const categoryName = categories.value[index].name;
+        
+        // 将该分类下的书籍移动到未分类
+        const uncategorized = categories.value.find(cat => cat.name === '未分类');
+        if (uncategorized) {
+          for (const bookId of categories.value[index].bookIds) {
+            const bookIndex = books.value.findIndex(book => book.id === bookId);
+            if (bookIndex !== -1) {
+              books.value[bookIndex].categoryId = uncategorized.id;
+            }
+          }
+          await saveBooks();
+        }
+        
+        categories.value.splice(index, 1);
+        await saveCategories();
+        
+        console.log('分类删除成功:', categoryName);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('删除分类失败:', error);
+      return false;
+    }
+  };
+
+  // 将书籍添加到分类
+  const addBookToCategory = async (bookId: string, categoryId: string) => {
+    try {
+      // 更新书籍的分类ID
+      const bookIndex = books.value.findIndex(book => book.id === bookId);
+      if (bookIndex !== -1) {
+        // 从原分类中移除
+        if (books.value[bookIndex].categoryId) {
+          const oldCategoryIndex = categories.value.findIndex(cat => cat.id === books.value[bookIndex].categoryId);
+          if (oldCategoryIndex !== -1) {
+            categories.value[oldCategoryIndex].bookIds = categories.value[oldCategoryIndex].bookIds.filter(id => id !== bookId);
+            categories.value[oldCategoryIndex].updatedAt = Date.now();
+          }
+        }
+        
+        // 添加到新分类
+        books.value[bookIndex].categoryId = categoryId;
+        
+        const categoryIndex = categories.value.findIndex(cat => cat.id === categoryId);
+        if (categoryIndex !== -1 && !categories.value[categoryIndex].bookIds.includes(bookId)) {
+          categories.value[categoryIndex].bookIds.push(bookId);
+          categories.value[categoryIndex].updatedAt = Date.now();
+        }
+        
+        await saveBooks();
+        await saveCategories();
+        
+        console.log('书籍添加到分类成功:', bookId, '->', categoryId);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('添加书籍到分类失败:', error);
+      return false;
+    }
+  };
+
+  // 从分类中移除书籍
+  const removeBookFromCategory = async (bookId: string) => {
+    try {
+      const bookIndex = books.value.findIndex(book => book.id === bookId);
+      if (bookIndex !== -1 && books.value[bookIndex].categoryId) {
+        const categoryId = books.value[bookIndex].categoryId;
+        
+        // 从分类中移除
+        const categoryIndex = categories.value.findIndex(cat => cat.id === categoryId);
+        if (categoryIndex !== -1) {
+          categories.value[categoryIndex].bookIds = categories.value[categoryIndex].bookIds.filter(id => id !== bookId);
+          categories.value[categoryIndex].updatedAt = Date.now();
+        }
+        
+        // 移除书籍的分类ID
+        books.value[bookIndex].categoryId = undefined;
+        
+        await saveBooks();
+        await saveCategories();
+        
+        console.log('书籍从分类中移除成功:', bookId);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('从分类中移除书籍失败:', error);
+      return false;
+    }
+  };
+
+  // 搜索书籍
+  const searchBooks = async (keyword: string): Promise<EbookMetadata[]> => {
+    try {
+      console.log('开始搜索书籍，关键字:', keyword);
+      
+      // 本地搜索
+      const localResults = books.value.filter(book => {
+        return book.title.toLowerCase().includes(keyword.toLowerCase()) ||
+               book.author.toLowerCase().includes(keyword.toLowerCase());
+      });
+      
+      console.log('本地搜索结果数量:', localResults.length);
+      
+      // 如果有百度网盘令牌，也在百度网盘中搜索
+      const tokenValid = await ensureBaidupanToken();
+      console.log('百度网盘令牌是否有效:', tokenValid);
+      
+      if (tokenValid) {
+        const { accessToken, rootPath } = userConfig.value.storage.baidupan;
+        const searchUrl = `${baidupanApiConfig.apiUrl}/search`;
+        // 使用用户配置的搜索路径，如果没有配置则使用默认路径
+        const searchDir = rootPath || `/apps/${AppName}`;
+        const fullUrl = `${searchUrl}?access_token=${accessToken}&key=${encodeURIComponent(keyword)}&dir=${encodeURIComponent(searchDir)}&recursion=1`;
+        console.log('搜索URL:', fullUrl);
+        console.log('搜索目录:', searchDir);
+        
+        try {
+          const response = await fetch(fullUrl, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('百度网盘搜索结果:', data);
+            
+            if (data.list && Array.isArray(data.list) && data.list.length > 0) {
+              // 处理百度网盘搜索结果
+              for (const fileInfo of data.list) {
+                if (!fileInfo.server_filename) continue;
+                
+                // 检查是否是支持的电子书格式
+                const ext = fileInfo.server_filename.split('.').pop()?.toLowerCase();
+                if (['epub', 'pdf', 'txt'].includes(ext || '')) {
+                  // 检查是否已经在本地列表中
+                  const existingBook = books.value.find(book => 
+                    book.baidupanPath === fileInfo.path
+                  );
+                  
+                  if (!existingBook) {
+                    // 创建新的书籍元数据
+                    const newBook: EbookMetadata = {
+                      id: `baidupan_${fileInfo.fs_id || Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                      title: fileInfo.server_filename.replace(`.${ext}`, ''),
+                      author: '未知作者',
+                      cover: '',
+                      path: fileInfo.path || '',
+                      format: ext || 'txt',
+                      size: fileInfo.size || 0,
+                      lastRead: Date.now(),
+                      totalChapters: 0,
+                      readingProgress: 0,
+                      storageType: 'baidupan',
+                      baidupanPath: fileInfo.path || '',
+                      addedAt: Date.now()
+                    };
+                    
+                    // 添加到搜索结果
+                    localResults.push(newBook);
+                    console.log('添加百度网盘搜索结果:', newBook.title);
+                  }
+                }
+              }
+            } else {
+              console.log('百度网盘中没有找到匹配的电子书');
+            }
+          } else {
+            console.warn('百度网盘搜索API响应异常:', response.status);
+          }
+        } catch (fetchError) {
+          console.warn('百度网盘搜索请求失败，跳过网盘搜索:', fetchError);
+          // 继续使用本地搜索结果
+        }
+      } else {
+        console.log('百度网盘令牌无效，跳过网盘搜索');
+      }
+      
+      console.log('搜索完成，总结果数量:', localResults.length);
+      return localResults;
+    } catch (error) {
+      console.error('搜索书籍失败:', error);
+      // 出错时返回空数组
+      return [];
     }
   };
 
@@ -398,6 +765,9 @@ export const useEbookStore = defineStore('ebook', () => {
     await saveUserConfig();
   };
 
+  // 应用名称，用于百度网盘搜索路径
+  const AppName = 'Neat Reader';
+
   // 百度网盘 API 配置
   const baidupanApiConfig = {
     clientId: 'WreV7F9LXSzyYOQzzP7Ih1UmvuDxN763', // 替换为真实的 App Key
@@ -405,12 +775,6 @@ export const useEbookStore = defineStore('ebook', () => {
     redirectUri: 'http://localhost:8080/callback', // 替换为真实的回调地址
     apiUrl: 'http://localhost:3001/api/baidu/pan', // 使用代理服务
     oauthUrl: 'http://localhost:3001/api/baidu/oauth' // 使用代理服务
-  };
-
-  // 更新百度网盘 API 配置
-  const updateBaidupanApiConfig = (clientId: string, clientSecret: string) => {
-    baidupanApiConfig.clientId = clientId;
-    baidupanApiConfig.clientSecret = clientSecret;
   };
 
   // 百度网盘授权
@@ -633,8 +997,8 @@ export const useEbookStore = defineStore('ebook', () => {
   // 检查百度网盘令牌是否有效
   const isBaidupanTokenValid = (): boolean => {
     const { accessToken, expiration } = userConfig.value.storage.baidupan;
-    // 确保所有必要的令牌信息都存在且未过期
-    return !!accessToken && !!userConfig.value.storage.baidupan.refreshToken && expiration > Date.now();
+    // 确保accessToken存在且未过期
+    return !!accessToken && expiration > Date.now();
   };
 
   // 确保百度网盘令牌有效
@@ -1317,25 +1681,79 @@ export const useEbookStore = defineStore('ebook', () => {
         return false;
       }
       
-      // 准备同步数据
-      const syncData = {
+      console.log('开始同步阅读进度，书籍总数:', books.value.length);
+      
+      // 1. 上传书籍列表
+      const booksData = {
         ebooks: books.value,
-        progress: readingProgress.value,
         timestamp: Date.now(),
         deviceId: deviceInfo.value.id,
         deviceName: deviceInfo.value.name
       };
+      const booksFile = new File([JSON.stringify(booksData)], 'books.json', { type: 'application/json' });
+      await uploadToBaidupanNew(booksFile, '/sync');
       
-      // 上传同步数据到百度网盘
-      const syncFile = new File([JSON.stringify(syncData)], 'sync.json', { type: 'application/json' });
-      const result = await uploadToBaidupanNew(syncFile, '/sync');
+      // 2. 上传分类列表
+      const categoriesData = {
+        categories: categories.value,
+        timestamp: Date.now(),
+        deviceId: deviceInfo.value.id
+      };
+      const categoriesFile = new File([JSON.stringify(categoriesData)], 'categories.json', { type: 'application/json' });
+      await uploadToBaidupanNew(categoriesFile, '/sync');
+      console.log('分类列表已同步到百度网盘');
       
-      console.log('同步阅读进度到百度网盘成功:', result);
-      return result;
+      // 3. 批量上传进度文件（每本书一个文件）
+      let syncedCount = 0;
+      const batchSize = 10; // 每批处理10本书
+      
+      for (let i = 0; i < books.value.length; i += batchSize) {
+        const batch = books.value.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (book) => {
+          try {
+            const progress = await localforage.getItem<ReadingProgress>(`progress_${book.id}`);
+            if (progress) {
+              const progressFile = new File([JSON.stringify(progress)], `${book.id}.json`, { type: 'application/json' });
+              await uploadToBaidupanNew(progressFile, `/sync/progress`);
+              syncedCount++;
+            }
+          } catch (error) {
+            console.error(`同步书籍进度失败: ${book.id}`, error);
+          }
+        });
+        
+        await Promise.all(batchPromises);
+      }
+      
+      console.log(`同步阅读进度到百度网盘成功，同步了 ${syncedCount} 本书的进度`);
+      return true;
     } catch (error) {
       console.error('同步阅读进度到百度网盘失败:', error);
       return false;
     }
+  };
+
+  // 只同步当前书籍的阅读进度到百度网盘（异步，不等待响应）
+  const syncCurrentBookProgress = (ebookId: string) => {
+    if (!isBaidupanTokenValid()) {
+      return;
+    }
+    
+    console.log('异步同步当前书籍进度到百度网盘:', ebookId);
+    
+    // 异步执行，不等待响应
+    (async () => {
+      try {
+        const progress = await localforage.getItem<ReadingProgress>(`progress_${ebookId}`);
+        if (progress) {
+          const progressFile = new File([JSON.stringify(progress)], `${ebookId}.json`, { type: 'application/json' });
+          await uploadToBaidupanNew(progressFile, `/sync/progress`);
+          console.log('当前书籍进度同步成功:', ebookId);
+        }
+      } catch (error) {
+        console.warn('同步当前书籍进度失败:', error);
+      }
+    })();
   };
 
   // 从百度网盘同步阅读进度
@@ -1347,28 +1765,54 @@ export const useEbookStore = defineStore('ebook', () => {
         return false;
       }
       
-      // 下载同步数据
-      const syncDataBlob = await downloadFromBaidupan('/sync/sync.json');
-      if (!syncDataBlob) {
-        console.error('无法下载同步数据');
-        return false;
+      console.log('开始从百度网盘同步阅读进度');
+      
+      // 1. 下载书籍列表
+      const booksBlob = await downloadFromBaidupan('/sync/books.json');
+      if (booksBlob) {
+        const booksText = await booksBlob.text();
+        const booksData = JSON.parse(booksText);
+        if (booksData.ebooks) {
+          books.value = booksData.ebooks;
+          await saveBooks();
+          console.log('同步书籍列表成功，书籍总数:', books.value.length);
+        }
       }
       
-      // 解析同步数据
-      const syncDataText = await syncDataBlob.text();
-      const syncData = JSON.parse(syncDataText);
-      
-      // 更新本地数据
-      if (syncData.ebooks) {
-        books.value = syncData.ebooks;
-        await saveBooks();
+      // 2. 下载分类列表
+      const categoriesBlob = await downloadFromBaidupan('/sync/categories.json');
+      if (categoriesBlob) {
+        const categoriesText = await categoriesBlob.text();
+        const categoriesData = JSON.parse(categoriesText);
+        if (categoriesData.categories) {
+          categories.value = categoriesData.categories;
+          await saveCategories();
+          console.log('同步分类列表成功，分类总数:', categories.value.length);
+        }
       }
       
-      if (syncData.progress) {
-        readingProgress.value = syncData.progress;
+      // 3. 下载并同步每本书的进度
+      let syncedCount = 0;
+      
+      for (const book of books.value) {
+        try {
+          const progressBlob = await downloadFromBaidupan(`/sync/progress/${book.id}.json`);
+          if (progressBlob) {
+            const progressText = await progressBlob.text();
+            const progress = JSON.parse(progressText);
+            await localforage.setItem(`progress_${book.id}`, progress);
+            // 如果是当前书籍，更新内存中的进度
+            if (book.id === readingProgress.value?.ebookId) {
+              readingProgress.value = progress;
+            }
+            syncedCount++;
+          }
+        } catch (error) {
+          console.error(`同步书籍进度失败: ${book.id}`, error);
+        }
       }
       
-      console.log('从百度网盘同步阅读进度成功');
+      console.log(`从百度网盘同步阅读进度成功，同步了 ${syncedCount} 本书的进度`);
       return true;
     } catch (error) {
       console.error('从百度网盘同步阅读进度失败:', error);
@@ -1594,13 +2038,17 @@ export const useEbookStore = defineStore('ebook', () => {
 
   // 初始化函数
   const initialize = async () => {
-    await loadBooks();
-    await loadUserConfig();
+    await Promise.all([
+      loadBooks(),
+      loadUserConfig(),
+      loadCategories()
+    ]);
   };
 
   return {
     // 状态
     books,
+    categories,
     currentBook,
     readingProgress,
     userConfig,
@@ -1610,6 +2058,8 @@ export const useEbookStore = defineStore('ebook', () => {
     localBooks,
     baidupanBooks,
     recentBooks,
+    getBooksByCategory,
+    getCategoryById,
     
     // 方法
     loadBooks,
@@ -1624,6 +2074,14 @@ export const useEbookStore = defineStore('ebook', () => {
     loadUserConfig,
     saveUserConfig,
     updateUserConfig,
+    loadCategories,
+    saveCategories,
+    addCategory,
+    updateCategory,
+    deleteCategory,
+    addBookToCategory,
+    removeBookFromCategory,
+    searchBooks,
     syncReadingProgress,
     syncReadingProgressFromBaidupan,
     importEpubFile,
@@ -1636,7 +2094,7 @@ export const useEbookStore = defineStore('ebook', () => {
     downloadFromBaidupan,
     listBaidupanFiles,
     isBaidupanTokenValid,
-    updateBaidupanApiConfig,
+    syncCurrentBookProgress,
     initialize
   };
 });

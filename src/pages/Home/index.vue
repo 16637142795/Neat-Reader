@@ -4,6 +4,19 @@
     <header class="header">
       <h1 class="title">Neat Reader</h1>
       <div class="header-actions">
+        <!-- 搜索框 -->
+        <div class="search-box">
+          <input 
+            type="text" 
+            v-model="searchKeyword" 
+            placeholder="搜索书名、作者"
+            class="search-input"
+            @keyup.enter="performSearch"
+          />
+          <button class="search-btn" @click="performSearch">
+            🔍
+          </button>
+        </div>
         <router-link to="/settings" class="btn btn-secondary">
           设置
         </router-link>
@@ -12,10 +25,39 @@
 
     <!-- 主要内容区 -->
     <main class="main">
+      <!-- 分类筛选 -->
+      <div class="category-filter">
+        <div class="category-tabs">
+          <button 
+            class="category-tab" 
+            :class="{ 'active': selectedCategory === 'all' }"
+            @click="selectedCategory = 'all'"
+          >
+            全部
+          </button>
+          <button 
+            v-for="category in categories" 
+            :key="category.id"
+            class="category-tab"
+            :class="{ 'active': selectedCategory === category.id }"
+            :style="{ borderColor: category.color }"
+            @click="selectedCategory = category.id"
+          >
+            {{ category.name }}
+            <span class="category-count">({{ getBooksByCategory(category.id).length }})</span>
+          </button>
+          <button class="category-tab add-category" @click="showAddCategoryDialog">
+            + 新建分类
+          </button>
+        </div>
+      </div>
+
       <!-- 电子书列表 -->
       <div class="books-section">
         <div class="section-header">
-          <h2 class="section-title">我的书架</h2>
+          <h2 class="section-title">
+            {{ selectedCategory === 'all' ? '我的书架' : getCategoryName(selectedCategory) }}
+          </h2>
           <div class="view-controls">
             <button 
               class="btn btn-secondary" 
@@ -34,10 +76,21 @@
           </div>
         </div>
 
+        <!-- 搜索结果提示 -->
+        <div v-if="isSearching" class="search-loading">
+          <div class="loading-spinner"></div>
+          <p>正在搜索...</p>
+        </div>
+
+        <div v-else-if="searchResults.length > 0 && searchKeyword" class="search-results-info">
+          <p>找到 {{ searchResults.length }} 个结果，关键词: {{ searchKeyword }}</p>
+          <button class="btn btn-sm" @click="clearSearch">清除搜索</button>
+        </div>
+
         <!-- 电子书列表 -->
         <div :class="viewMode === 'grid' ? 'grid' : 'list'" class="books-list">
           <div 
-            v-for="book in books" 
+            v-for="book in displayBooks" 
             :key="book.id" 
             class="book-item" 
             @click="goToReader(book.id)"
@@ -57,15 +110,26 @@
                 <span class="progress-text">{{ book.readingProgress }}%</span>
               </div>
               <p class="book-last-read">{{ formatDate(book.lastRead) }}</p>
+              <div v-if="book.categoryId" class="book-category">
+                {{ getCategoryName(book.categoryId) }}
+              </div>
             </div>
           </div>
         </div>
 
         <!-- 空状态 -->
-        <div v-if="books.length === 0" class="empty-state">
+        <div v-if="displayBooks.length === 0 && !isSearching" class="empty-state">
           <div class="empty-icon">📚</div>
-          <h3>书架是空的</h3>
-          <p>添加一些电子书开始阅读吧</p>
+          <h3>{{ selectedCategory === 'all' ? '书架是空的' : '该分类下没有书籍' }}</h3>
+          <p>{{ selectedCategory === 'all' ? '添加一些电子书开始阅读吧' : '点击右上角添加书籍' }}</p>
+        </div>
+
+        <!-- 搜索无结果状态 -->
+        <div v-if="searchResults.length === 0 && searchKeyword && !isSearching" class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <h3>没有找到匹配的书籍</h3>
+          <p>尝试其他关键词或检查拼写</p>
+          <button class="btn btn-secondary" @click="clearSearch">清除搜索</button>
         </div>
       </div>
     </main>
@@ -89,22 +153,67 @@
       v-if="showMenu" 
       class="context-menu"
       :style="{ left: menuX + 'px', top: menuY + 'px' }"
+      @contextmenu.prevent
+    >
+      <div class="menu-item" @click="handleUploadToBaidupan">
+        📤 上传到百度网盘
+      </div>
+      <div class="menu-item" @click="openCategoryMenu">
+        📁 分类管理
+      </div>
+      <div class="menu-item" @click="handleRemoveBook">
+        🗑️ 删除书籍
+      </div>
+    </div>
+
+    <!-- 分类管理子菜单 -->
+    <div 
+      v-if="isCategoryMenuVisible"
+      class="context-menu category-submenu"
+      :style="{ left: subMenuX + 'px', top: subMenuY + 'px' }"
       @click.stop
       @contextmenu.prevent
     >
       <div 
+        v-for="category in categories" 
+        :key="category.id"
         class="menu-item"
-        @click="uploadToBaidupan(selectedBook)"
-        v-if="selectedBook"
+        @click="handleMoveToCategory(category.id)"
       >
-        📤 上传到百度网盘
+        {{ category.name }}
       </div>
-      <div 
-        class="menu-item"
-        @click="removeBook(selectedBook)"
-        v-if="selectedBook"
-      >
-        🗑️ 删除书籍
+      <div class="menu-item add-category" @click.stop="showAddCategoryDialog">
+        + 新建分类
+      </div>
+    </div>
+
+    <!-- 添加分类对话框 -->
+    <div v-if="showAddCategory" class="dialog-overlay" @click="closeAddCategoryDialog">
+      <div class="dialog-content" @click.stop>
+        <h3>新建分类</h3>
+        <div class="dialog-form">
+          <div class="form-group">
+            <label>分类名称</label>
+            <input 
+              type="text" 
+              v-model="newCategoryName" 
+              placeholder="输入分类名称"
+              class="form-input"
+            />
+          </div>
+          <div class="form-group">
+            <label>分类颜色</label>
+            <input 
+              type="color" 
+              v-model="newCategoryColor" 
+              class="color-picker"
+            />
+          </div>
+        </div>
+        <div class="dialog-buttons">
+          <button class="btn btn-secondary" @click="closeAddCategoryDialog">取消</button>
+          <button class="btn btn-primary" @click="addCategory" :disabled="!newCategoryName.trim()">创建</button>
+        </div>
       </div>
     </div>
   </div>
@@ -125,16 +234,52 @@ const dialogStore = useDialogStore()
 // 响应式数据
 const viewMode = ref<'grid' | 'list'>('grid')
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const searchKeyword = ref('')
+const selectedCategory = ref('all')
 
 // 右键菜单相关
 const showMenu = ref(false)
+const isCategoryMenuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
+const subMenuX = ref(0)
+const subMenuY = ref(0)
 const selectedBook = ref<any>(null)
+
+// 分类对话框相关
+const showAddCategory = ref(false)
+const newCategoryName = ref('')
+const newCategoryColor = ref('#4A90E2')
+
+// 搜索相关
+const searchResults = ref<any[]>([])
+const isSearching = ref(false)
 
 // 计算属性：显示所有书籍（本地和百度网盘）
 const books = computed(() => {
   return ebookStore.books
+})
+
+// 计算属性：分类列表
+const categories = computed(() => {
+  return ebookStore.categories || []
+})
+
+// 计算属性：根据分类筛选书籍
+const filteredBooks = computed(() => {
+  if (selectedCategory.value === 'all') {
+    return books.value
+  } else {
+    return books.value.filter(book => book.categoryId === selectedCategory.value)
+  }
+})
+
+// 计算属性：显示的书籍
+const displayBooks = computed(() => {
+  if (searchKeyword.value && searchResults.value.length > 0) {
+    return searchResults.value
+  }
+  return filteredBooks.value
 })
 
 // 方法
@@ -202,6 +347,7 @@ const formatDate = (timestamp: number) => {
 const showContextMenu = (event: MouseEvent, book: any) => {
   event.preventDefault()
   showMenu.value = true
+  isCategoryMenuVisible.value = false
   menuX.value = event.clientX
   menuY.value = event.clientY
   selectedBook.value = book
@@ -213,8 +359,25 @@ const showContextMenu = (event: MouseEvent, book: any) => {
 // 关闭右键菜单
 const closeContextMenu = () => {
   showMenu.value = false
+  isCategoryMenuVisible.value = false
   selectedBook.value = null
   document.removeEventListener('click', closeContextMenu)
+}
+
+// 处理上传到百度网盘
+const handleUploadToBaidupan = async () => {
+  if (!selectedBook.value) return
+  const book = selectedBook.value
+  closeContextMenu()
+  await uploadToBaidupan(book)
+}
+
+// 处理删除书籍
+const handleRemoveBook = () => {
+  if (!selectedBook.value) return
+  const book = selectedBook.value
+  closeContextMenu()
+  removeBook(book)
 }
 
 // 上传到百度网盘
@@ -234,7 +397,7 @@ const uploadToBaidupan = async (book: any) => {
 }
 
 // 删除书籍
-const removeBook = async (book: any) => { // 这里的 book 是通过模板传进来的
+const removeBook = async (book: any) => {
   if (!book) return;
   
   // 立即将需要删除的对象锁定在局部变量中，防止被 closeContextMenu 影响
@@ -272,6 +435,157 @@ const removeBook = async (book: any) => { // 这里的 book 是通过模板传�
   closeContextMenu(); // 这里虽然清空了 selectedBook，但上面的局部变量已锁定数据
 }
 
+// 显示分类管理菜单
+const openCategoryMenu = () => {
+  console.log('打开分类管理菜单')
+  console.log('主菜单位置:', menuX.value, menuY.value)
+  
+  // 设置子菜单位置在主菜单右侧
+  subMenuX.value = menuX.value + 180 // 180 是菜单宽度
+  subMenuY.value = menuY.value
+  
+  // 检查是否超出屏幕右侧
+  if (subMenuX.value + 180 > window.innerWidth) {
+    // 如果右侧空间不足，显示在主菜单左侧
+    subMenuX.value = menuX.value - 180
+  }
+  
+  console.log('子菜单位置:', subMenuX.value, subMenuY.value)
+  
+  // 关闭主菜单，显示子菜单
+  showMenu.value = false
+  
+  // 移除点击外部关闭菜单的监听器，因为子菜单需要单独处理
+  document.removeEventListener('click', closeContextMenu)
+  
+  // 使用 setTimeout 避免事件冲突
+  setTimeout(() => {
+    isCategoryMenuVisible.value = true
+    console.log('子菜单已显示')
+    
+    // 为子菜单添加点击外部关闭的监听器
+    setTimeout(() => {
+      document.addEventListener('click', closeSubMenuContextMenu)
+    }, 100)
+  }, 50)
+}
+
+// 关闭子菜单的上下文菜单
+const closeSubMenuContextMenu = (event: MouseEvent) => {
+  const subMenu = document.querySelector('.category-submenu')
+  if (subMenu && !subMenu.contains(event.target as Node)) {
+    closeContextMenu()
+  }
+}
+
+// 移动书籍到分类
+const handleMoveToCategory = async (categoryId: string) => {
+  if (!selectedBook.value) {
+    console.error('selectedBook 为 null，无法移动书籍')
+    return
+  }
+  
+  const book = selectedBook.value
+  console.log('移动书籍到分类:', book.title, '->', categoryId)
+  console.log('selectedBook:', selectedBook.value)
+  
+  try {
+    console.log('调用 ebookStore.addBookToCategory')
+    const result = await ebookStore.addBookToCategory(book.id, categoryId)
+    console.log('addBookToCategory 返回结果:', result)
+    
+    if (result) {
+      dialogStore.showSuccessDialog('书籍分类更新成功')
+      closeContextMenu()
+      console.log('书籍分类更新成功，菜单已关闭')
+    } else {
+      dialogStore.showErrorDialog('分类更新失败', '无法找到指定书籍或分类')
+      closeContextMenu()
+      console.log('书籍分类更新失败，菜单已关闭')
+    }
+  } catch (error) {
+    console.error('移动书籍到分类失败:', error)
+    dialogStore.showErrorDialog('分类更新失败', error instanceof Error ? error.message : String(error))
+    closeContextMenu()
+  }
+}
+
+// 显示添加分类对话框
+const showAddCategoryDialog = () => {
+  showAddCategory.value = true
+  newCategoryName.value = ''
+  newCategoryColor.value = '#4A90E2'
+  closeContextMenu()
+}
+
+// 关闭添加分类对话框
+const closeAddCategoryDialog = () => {
+  showAddCategory.value = false
+  newCategoryName.value = ''
+}
+
+// 添加分类
+const addCategory = async () => {
+  if (!newCategoryName.value.trim()) return
+  
+  console.log('开始创建分类，名称:', newCategoryName.value.trim(), '颜色:', newCategoryColor.value);
+  
+  try {
+    const result = await ebookStore.addCategory(newCategoryName.value.trim(), newCategoryColor.value)
+    console.log('分类创建成功，返回结果:', result);
+    
+    // 等待一下确保数据已保存
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // 验证分类是否真的保存了
+    console.log('当前分类列表:', ebookStore.categories);
+    console.log('分类数量:', ebookStore.categories.length);
+    
+    dialogStore.showSuccessDialog('分类创建成功')
+    closeAddCategoryDialog()
+  } catch (error) {
+    console.error('添加分类失败:', error)
+    dialogStore.showErrorDialog('分类创建失败', error instanceof Error ? error.message : String(error))
+  }
+}
+
+// 执行搜索
+const performSearch = async () => {
+  if (!searchKeyword.value.trim()) {
+    clearSearch()
+    return
+  }
+  
+  isSearching.value = true
+  try {
+    const results = await ebookStore.searchBooks(searchKeyword.value.trim())
+    searchResults.value = results
+  } catch (error) {
+    console.error('搜索失败:', error)
+    dialogStore.showErrorDialog('搜索失败', error instanceof Error ? error.message : String(error))
+    searchResults.value = []
+  } finally {
+    isSearching.value = false
+  }
+}
+
+// 清除搜索
+const clearSearch = () => {
+  searchKeyword.value = ''
+  searchResults.value = []
+}
+
+// 获取分类名称
+const getCategoryName = (categoryId: string) => {
+  const category = ebookStore.categories.find(cat => cat.id === categoryId)
+  return category ? category.name : '未分类'
+}
+
+// 获取分类下的书籍数量
+const getBooksByCategory = (categoryId: string) => {
+  return ebookStore.books.filter(book => book.categoryId === categoryId)
+}
+
 // 生命周期钩子
 onMounted(async () => {
   try {
@@ -280,6 +594,7 @@ onMounted(async () => {
     await ebookStore.initialize();
     console.log('电子书存储初始化完成');
     console.log('当前书籍数量:', ebookStore.books.length);
+    console.log('当前分类数量:', ebookStore.categories.length);
   } catch (error) {
     console.error('初始化电子书存储失败:', error);
   }
@@ -314,7 +629,35 @@ onMounted(async () => {
 
 .header-actions {
   display: flex;
+  align-items: center;
   gap: 12px;
+}
+
+/* 搜索框 */
+.search-box {
+  display: flex;
+  align-items: center;
+  background-color: #F5F7FA;
+  border-radius: 20px;
+  padding: 4px 12px;
+  min-width: 200px;
+}
+
+.search-input {
+  border: none;
+  background: transparent;
+  outline: none;
+  padding: 8px;
+  flex: 1;
+  font-size: 14px;
+}
+
+.search-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  font-size: 16px;
 }
 
 /* 主要内容区 */
@@ -322,6 +665,63 @@ onMounted(async () => {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
+}
+
+/* 分类筛选 */
+.category-filter {
+  max-width: 1200px;
+  margin: 0 auto 24px;
+  background-color: white;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.category-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.category-tab {
+  background-color: white;
+  border: 2px solid #E8E8E8;
+  border-radius: 20px;
+  padding: 8px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.category-tab:hover {
+  border-color: #4A90E2;
+  background-color: #F0F8FF;
+}
+
+.category-tab.active {
+  background-color: #4A90E2;
+  color: white;
+  border-color: #4A90E2;
+}
+
+.category-count {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.category-tab.add-category {
+  border: 2px dashed #4A90E2;
+  color: #4A90E2;
+  background-color: #F0F8FF;
+}
+
+.category-tab.add-category:hover {
+  background-color: #E6F2FF;
 }
 
 /* 书籍区域 */
@@ -352,6 +752,46 @@ onMounted(async () => {
 .view-controls .btn.active {
   background-color: #4A90E2;
   color: white;
+}
+
+/* 搜索结果信息 */
+.search-results-info {
+  background-color: #F0F8FF;
+  border: 1px solid #4A90E2;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.search-results-info p {
+  margin: 0;
+  color: #333;
+  font-size: 14px;
+}
+
+/* 搜索加载状态 */
+.search-loading {
+  text-align: center;
+  padding: 48px 24px;
+  color: #666;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #F0F0F0;
+  border-top: 4px solid #4A90E2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 /* 电子书列表 */
@@ -390,6 +830,17 @@ onMounted(async () => {
   position: absolute;
   top: 8px;
   right: 8px;
+  background-color: rgba(0, 0, 0, 0.6);
+  color: white;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.grid .book-storage {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
   background-color: rgba(0, 0, 0, 0.6);
   color: white;
   font-size: 12px;
@@ -446,6 +897,16 @@ onMounted(async () => {
   margin-top: auto;
 }
 
+.grid .book-category {
+  font-size: 12px;
+  color: #4A90E2;
+  margin-top: 4px;
+  padding: 2px 8px;
+  background-color: #F0F8FF;
+  border-radius: 10px;
+  align-self: flex-start;
+}
+
 /* 列表视图 */
 .list .book-item {
   display: flex;
@@ -477,6 +938,17 @@ onMounted(async () => {
   position: absolute;
   top: 4px;
   right: 4px;
+  background-color: rgba(0, 0, 0, 0.6);
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.list .book-storage {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
   background-color: rgba(0, 0, 0, 0.6);
   color: white;
   font-size: 10px;
@@ -534,6 +1006,16 @@ onMounted(async () => {
   margin: 0;
 }
 
+.list .book-category {
+  font-size: 12px;
+  color: #4A90E2;
+  margin-top: 4px;
+  padding: 2px 8px;
+  background-color: #F0F8FF;
+  border-radius: 10px;
+  display: inline-block;
+}
+
 /* 空状态 */
 .empty-state {
   text-align: center;
@@ -555,7 +1037,118 @@ onMounted(async () => {
 
 .empty-state p {
   font-size: 16px;
-  margin: 0;
+  margin: 0 0 16px;
+}
+
+/* 对话框样式 */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.dialog-content {
+  background-color: white;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+.dialog-content h3 {
+  margin: 0 0 20px;
+  color: #333;
+  font-size: 18px;
+}
+
+.dialog-form {
+  margin-bottom: 24px;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: #666;
+}
+
+.form-input {
+  width: 100%;
+  padding: 10px;
+  border: 2px solid #E8E8E8;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.form-input:focus {
+  border-color: #4A90E2;
+}
+
+.color-picker {
+  width: 100%;
+  height: 40px;
+  border: 2px solid #E8E8E8;
+  border-radius: 8px;
+  cursor: pointer;
+  outline: none;
+}
+
+.dialog-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary {
+  background-color: #E8E8E8;
+  color: #333;
+}
+
+.btn-secondary:hover {
+  background-color: #D8D8D8;
+}
+
+.btn-primary {
+  background-color: #4A90E2;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #357ABD;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
 }
 
 /* 添加按钮 */
@@ -596,6 +1189,11 @@ onMounted(async () => {
   overflow: hidden;
 }
 
+.category-submenu {
+  margin-left: 4px;
+  border-left: 3px solid #4A90E2;
+}
+
 .menu-item {
   padding: 12px 16px;
   cursor: pointer;
@@ -616,19 +1214,45 @@ onMounted(async () => {
 @media (max-width: 768px) {
   .header {
     padding: 12px 16px;
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  .header-actions {
+    justify-content: space-between;
+  }
+
+  .search-box {
+    min-width: auto;
   }
 
   .title {
     font-size: 20px;
+    text-align: center;
   }
 
   .main {
     padding: 16px;
   }
 
+  .category-tabs {
+    gap: 4px;
+  }
+
+  .category-tab {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+
   .section-header {
     flex-direction: column;
     align-items: flex-start;
+    gap: 12px;
+  }
+
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 12px;
   }
 
@@ -650,6 +1274,10 @@ onMounted(async () => {
 
   .list .book-title {
     font-size: 16px;
+  }
+
+  .dialog-content {
+    padding: 16px;
   }
 }
 </style>
