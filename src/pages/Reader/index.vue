@@ -142,7 +142,10 @@
               @change="onSliderChange"
               class="ios-slider"
             />
-            <div class="chapter-progress">
+            <div class="chapter-progress" v-if="book?.format === 'pdf'">
+              第 {{ currentPdfPage }} / {{ totalPdfPages }} 页
+            </div>
+            <div class="chapter-progress" v-else>
               第 {{ currentChapterIndex + 1 }} / {{ chapters.length }} 章
             </div>
           </div>
@@ -424,11 +427,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, onBeforeUnmount, computed, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ePub from 'epubjs'
+import * as pdfjsLib from 'pdfjs-dist'
 import localforage from 'localforage'
 import { useEbookStore } from '../../stores/ebook'
+
+// 设置 PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
 
 const route = useRoute()
 const router = useRouter()
@@ -487,20 +494,24 @@ const rendition = ref<any>(null)
 const bookInstance = ref<any>(null)
 const viewportRef = ref<HTMLElement | null>(null)
 const searchInput = ref<HTMLElement | null>(null)
+const pdfCanvas = ref<HTMLCanvasElement | null>(null)
+
+// PDF 渲染相关
+const pdfDoc = ref<any>(null)
+const currentPdfPage = ref(1)
+const totalPdfPages = ref(0)
+const pdfScale = ref(1.5)
 
 // 滚动模式相关
 const nextChapterRendition = ref<any>(null)
 const prevChapterRendition = ref<any>(null)
 const isScrollModeActive = ref(false)
-const scrollContainer = ref<HTMLElement | null>(null)
 const observer = ref<IntersectionObserver | null>(null)
 const nextChapterTrigger = ref<HTMLElement | null>(null)
 const prevChapterTrigger = ref<HTMLElement | null>(null)
 
 // 性能优化
-let scrollDebounceTimer: number | null = null
 let autoScrollTimer: number | null = null
-const SCROLL_DEBOUNCE_DELAY = 300
 const AUTO_SCROLL_INTERVAL = 50
 const isChapterSwitching = ref(false)
 
@@ -521,19 +532,6 @@ const sidebarTitle = computed(() => {
 })
 
 // --- 核心交互修复 ---
-const handleGlobalClick = (clientX: number) => {
-  const width = window.innerWidth
-  const threshold = width * 0.3 // 调整热区比例为30%
-
-  if (clientX < threshold) {
-    prevPage()
-  } else if (clientX > width - threshold) {
-    nextPage()
-  } else {
-    toggleControls()
-  }
-}
-
 const toggleControls = () => {
   showControls.value = !showControls.value
   if (showControls.value) {
@@ -546,30 +544,21 @@ const toggleControls = () => {
   }
 }
 
-const prevPage = () => {
-  if (rendition.value) {
+const prevPage = async () => {
+  if (book.value?.format === 'pdf') {
+    await prevPdfPage()
+  } else if (rendition.value) {
     rendition.value.prev()
     updatePageInfo()
   }
 }
 
-const nextPage = () => {
-  if (rendition.value) {
+const nextPage = async () => {
+  if (book.value?.format === 'pdf') {
+    await nextPdfPage()
+  } else if (rendition.value) {
     rendition.value.next()
     updatePageInfo()
-  }
-}
-
-const handleWheel = (e: WheelEvent) => {
-  if (pageMode.value === 'page') {
-    e.preventDefault()
-    if (Math.abs(e.deltaY) < 15) return
-    if (e.deltaY > 0) nextPage()
-    else prevPage()
-  } else if (pageMode.value === 'scroll' && autoScroll.value) {
-    e.preventDefault()
-    // 在自动滚动模式下，鼠标滚轮暂停自动滚动
-    pauseAutoScroll()
   }
 }
 
@@ -843,7 +832,11 @@ const switchPageMode = async (mode: 'page' | 'scroll') => {
   // 重新初始化阅读器
   loading.value = true
   setTimeout(async () => {
-    await initEpub()
+    if (book.value?.format === 'pdf') {
+      await initPdf()
+    } else {
+      await initEpub()
+    }
     loading.value = false
   }, 100)
   
@@ -956,8 +949,11 @@ const onSliderInput = () => {
   // 实时更新进度显示
 }
 
-const onSliderChange = () => {
-  if (bookInstance.value && rendition.value && isLocationsReady.value) {
+const onSliderChange = async () => {
+  if (book.value?.format === 'pdf' && pdfDoc.value) {
+    const pageNum = Math.ceil((displayProgress.value / 100) * totalPdfPages.value)
+    await goToPdfPage(pageNum)
+  } else if (bookInstance.value && rendition.value && isLocationsReady.value) {
     const cfi = bookInstance.value.locations.cfiFromPercentage(displayProgress.value / 100)
     if (cfi) {
       rendition.value.display(cfi)
@@ -972,6 +968,98 @@ const toggleProgressPopup = () => {
 }
 
 // --- 初始化优化 ---
+const initPdf = async () => {
+  if (!book.value) return
+
+  isLocationsReady.value = false
+  displayProgress.value = 0
+  readingProgress.value = 0
+
+  const content = await localforage.getItem(`ebook_content_${book.value.id}`) as ArrayBuffer
+  if (!content) {
+    console.error('书籍内容加载失败')
+    loading.value = false
+    return
+  }
+
+  // 清理旧实例
+  if (pdfDoc.value) {
+    pdfDoc.value.destroy()
+  }
+  pdfDoc.value = null
+
+  try {
+    await nextTick()
+
+    // 加载 PDF 文档
+    const loadingTask = pdfjsLib.getDocument({ data: content })
+    pdfDoc.value = await loadingTask.promise
+    totalPdfPages.value = pdfDoc.value.numPages
+    currentPdfPage.value = 1
+
+    // 渲染第一页
+    await renderPdfPage(1)
+
+    // 获取保存的进度
+    const savedProgress = await ebookStore.loadReadingProgress(book.value.id)
+    if (savedProgress) {
+      currentPdfPage.value = savedProgress.chapterIndex || 1
+      readingTime.value = savedProgress.readingTime || 0
+      displayProgress.value = Math.floor(savedProgress.position * 100)
+      readingProgress.value = Math.floor(savedProgress.position * 100)
+      await renderPdfPage(currentPdfPage.value)
+    }
+
+    loading.value = false
+  } catch (error) {
+    console.error('PDF 加载失败:', error)
+    loading.value = false
+  }
+}
+
+const renderPdfPage = async (pageNum: number) => {
+  if (!pdfDoc.value || !pdfCanvas.value) return
+
+  try {
+    const page = await pdfDoc.value.getPage(pageNum)
+    const viewport = page.getViewport({ scale: pdfScale.value })
+
+    pdfCanvas.value.height = viewport.height
+    pdfCanvas.value.width = viewport.width
+
+    const renderContext = {
+      canvasContext: pdfCanvas.value.getContext('2d')!,
+      viewport: viewport
+    }
+
+    await page.render(renderContext).promise
+    currentChapterTitle.value = `第 ${pageNum} / ${totalPdfPages.value} 页`
+  } catch (error) {
+    console.error('PDF 页面渲染失败:', error)
+  }
+}
+
+// PDF 导航
+const goToPdfPage = async (pageNum: number) => {
+  if (pageNum < 1 || pageNum > totalPdfPages.value) return
+  currentPdfPage.value = pageNum
+  await renderPdfPage(pageNum)
+  displayProgress.value = Math.floor((currentPdfPage.value / totalPdfPages.value) * 100)
+  readingProgress.value = displayProgress.value
+}
+
+const prevPdfPage = async () => {
+  if (currentPdfPage.value > 1) {
+    await goToPdfPage(currentPdfPage.value - 1)
+  }
+}
+
+const nextPdfPage = async () => {
+  if (currentPdfPage.value < totalPdfPages.value) {
+    await goToPdfPage(currentPdfPage.value + 1)
+  }
+}
+
 const initEpub = async () => {
   if (!book.value) return
   
@@ -1082,7 +1170,7 @@ const initEpub = async () => {
           displayProgress.value = Math.floor(percent * 100)
         }
       }
-    }).catch(err => {
+    }).catch((err: any) => {
       console.warn('位置索引生成失败:', err)
     })
     
@@ -1207,6 +1295,10 @@ const goBack = async () => {
     bookInstance.value?.destroy()
     bookInstance.value = null
     rendition.value = null
+    if (pdfDoc.value) {
+      pdfDoc.value.destroy()
+    }
+    pdfDoc.value = null
     router.push('/')
     return
   }
@@ -1227,6 +1319,10 @@ const goBack = async () => {
   bookInstance.value?.destroy()
   bookInstance.value = null
   rendition.value = null
+  if (pdfDoc.value) {
+    pdfDoc.value.destroy()
+  }
+  pdfDoc.value = null
 
   router.push('/')
 }
@@ -1241,7 +1337,12 @@ onMounted(async () => {
   book.value = ebookStore.getBookById(bookId)
   
   if (book.value) {
-    await initEpub()
+    // 根据书籍格式选择初始化函数
+    if (book.value.format === 'pdf') {
+      await initPdf()
+    } else {
+      await initEpub()
+    }
   } else {
     console.error('书籍不存在')
     router.push('/')
@@ -1307,8 +1408,17 @@ onUnmounted(async () => {
     console.warn('销毁书籍实例失败:', e)
   }
   
+  try {
+    if (pdfDoc.value) {
+      pdfDoc.value.destroy()
+    }
+  } catch (e) {
+    console.warn('销毁PDF文档失败:', e)
+  }
+  
   bookInstance.value = null
   rendition.value = null
+  pdfDoc.value = null
 })
 
 // --- 辅助函数 ---
@@ -1479,7 +1589,7 @@ const bindRenditionEvents = () => {
     updateChapterTitle(location)
   })
   
-  rendition.value.on('rendered', (section: any) => {
+  rendition.value.on('rendered', () => {
     updateChapterTitle()
   })
 }
@@ -1513,6 +1623,39 @@ const updateChapterTitle = (location?: any) => {
 }
 
 const saveProgress = async () => {
+  if (!book.value) return
+
+  // PDF 格式保存进度
+  if (book.value.format === 'pdf' && pdfDoc.value) {
+    const position = currentPdfPage.value / totalPdfPages.value
+    readingTime.value = Math.floor(readingTime.value + 0.5)
+
+    const progressData = {
+      ebookId: book.value.id,
+      chapterIndex: currentPdfPage.value,
+      chapterTitle: currentChapterTitle.value,
+      position: position,
+      cfi: '',
+      timestamp: Date.now(),
+      deviceId: ebookStore.deviceInfo.id,
+      deviceName: ebookStore.deviceInfo.name,
+      readingTime: readingTime.value
+    }
+
+    try {
+      await localforage.setItem(`progress_${book.value.id}`, progressData)
+      await ebookStore.updateBook(book.value.id, {
+        lastRead: Date.now(),
+        readingProgress: Math.round(position * 100)
+      })
+      console.log('PDF 进度保存成功')
+    } catch (error) {
+      console.error('PDF 进度保存失败:', error)
+    }
+    return
+  }
+
+  // EPUB 格式保存进度
   if (!rendition.value) return
   
   const location = rendition.value.currentLocation()

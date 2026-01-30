@@ -1,0 +1,27 @@
+{
+  "name": "neat-reader",
+  "shortname": "neat-reader",
+  "version": "0.0.0",
+  "description": "A Neat Reader desktop application built with Wails",
+  "basename": "neat-reader",
+  "刷除": "neat-reader.exe",
+  "icon": "appicon.png",
+  "author": {
+    "name": "Neat Reader",
+    "email": "support@neat-reader.com"
+  },
+  "frontend": {
+    "dir": ".",
+    "build": {
+      "devBrowserCommand": ""
+    }
+  },
+  "build": {
+    "windows": {
+      "webview2": {
+        "download": true,
+        "fixedVersion": ""
+      }
+    }
+  }
+}
