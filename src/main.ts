@@ -2,17 +2,18 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
-
-// 导入全局样式
 import './assets/styles/global.css'
+import { wails } from './wails'
 
 const app = createApp(App)
 
-// 使用Pinia进行状态管理
 app.use(createPinia())
-
-// 使用Vue Router进行路由管理
 app.use(router)
 
-// 挂载应用
 app.mount('#app')
+
+wails.init().then(() => {
+  console.log('Wails initialized');
+}).catch((err) => {
+  console.warn('Wails initialization failed:', err);
+});

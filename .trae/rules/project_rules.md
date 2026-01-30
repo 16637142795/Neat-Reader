@@ -1,0 +1,12 @@
+1、运行在8080端口
+2、默认终端是powershell
+3、默认浏览器是chrome
+4、百度网盘开放平台文档如下
+https://pan.baidu.com/union/doc/3ksg0s9ye
+https://pan.baidu.com/union/doc/3ksg0s9r7
+https://pan.baidu.com/union/doc/nksg0s9vi
+https://pan.baidu.com/union/doc/rksg0sa17
+https://pan.baidu.com/union/doc/olkuuy5kz
+https://pan.baidu.com/union/doc/Mlvw5hfnr
+5、创建目录
+https://pan.baidu.com/union/doc/6lbaqe1lw

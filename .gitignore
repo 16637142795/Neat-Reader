@@ -1,3 +1,16 @@
+# Dependencies
 /node_modules/
+
+# Build outputs
 /dist/
+/build/
+
+# IDE
 /.idea/
+.vscode/
+
+# Wails auto-generated
+/frontend/
+
+# Logs
+*.log
