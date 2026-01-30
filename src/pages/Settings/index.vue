@@ -215,7 +215,6 @@ import { useDialogStore } from '../../stores/dialog'
 const ebookStore = useEbookStore()
 const dialogStore = useDialogStore()
 
-const isBaidupanAuthorized = computed(() => ebookStore.isBaidupanTokenValid())
 const storageConfig = computed(() => ebookStore.userConfig.storage)
 const readerConfig = computed(() => ebookStore.userConfig.reader)
 const uiConfig = computed(() => ebookStore.userConfig.ui)
