@@ -1,0 +1,173 @@
+/* 全局样式重置 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  color: #333;
+  background-color: #f5f7fa;
+  line-height: 1.6;
+}
+
+/* 通用容器样式 */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+/* 通用按钮样式 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+}
+
+.btn-primary {
+  background-color: #4A90E2;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #357ABD;
+}
+
+.btn-secondary {
+  background-color: #F5F7FA;
+  color: #4A90E2;
+  border: 1px solid #E4E7ED;
+}
+
+.btn-secondary:hover {
+  background-color: #E4E7ED;
+}
+
+/* 通用卡片样式 */
+.card {
+  background-color: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+/* 通用表单样式 */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #606266;
+}
+
+.form-control {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #DCDFE6;
+  border-radius: 4px;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: #4A90E2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+}
+
+/* 通用进度条样式 */
+.progress {
+  width: 100%;
+  height: 4px;
+  background-color: #E4E7ED;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background-color: #4A90E2;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* 通用网格布局 */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+/* 通用列表布局 */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 12px;
+  }
+}
+
+/* 深色主题基础样式 */
+.theme-dark {
+  background-color: #1F2937;
+  color: #F3F4F6;
+}
+
+.theme-dark .card {
+  background-color: #374151;
+  color: #F3F4F6;
+}
+
+.theme-dark .btn-secondary {
+  background-color: #4B5563;
+  color: #F3F4F6;
+  border: 1px solid #6B7280;
+}
+
+.theme-dark .btn-secondary:hover {
+  background-color: #6B7280;
+}
+
+.theme-dark .form-control {
+  background-color: #4B5563;
+  color: #F3F4F6;
+  border-color: #6B7280;
+}
+
+.theme-dark .form-control:focus {
+  border-color: #4A90E2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+}
+
+.theme-dark .progress {
+  background-color: #4B5563;
+}
+
+.theme-dark .progress-bar {
+  background-color: #4A90E2;
+}
